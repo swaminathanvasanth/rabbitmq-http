@@ -1,5 +1,5 @@
 // Copyright (C) 2013 Chen "smallfish" Xiaoyu (陈小玉)
-
+// Updated 2017 by Vasanth Rajaraman, RBCCPS, Indian Institute of Science
 package main
 
 import (
@@ -10,11 +10,12 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+//	"time"
 )
 
 var (
-	address = flag.String("address", "127.0.0.1:8080", "bind host:port")
-	amqpUri = flag.String("amqp", "amqp://guest:guest@127.0.0.1:5672/", "amqp uri")
+        address = flag.String("address", "10.156.14.6:8989", "bind host:port")
+        amqpUri = flag.String("amqp", "amqp://rbccps:rbccps@123@10.156.14.6:5672/", "amqp uri")
 )
 
 func init() {
@@ -24,10 +25,10 @@ func init() {
 // Entity for HTTP Request Body: Message/Exchange/Queue/QueueBind JSON Input
 type MessageEntity struct {
 	Exchange     string `json:"exchange"`
-	Key          string `json:"key"`
+	Key          string `json:"resourceID"` // Key          string `json:"key"`
 	DeliveryMode uint8  `json:"deliverymode"`
 	Priority     uint8  `json:"priority"`
-	Body         string `json:"body"`
+	Body         string `json:"data"`
 }
 
 type ExchangeEntity struct {
@@ -50,7 +51,7 @@ type QueueBindEntity struct {
 	Queue    string   `json:"queue"`
 	Exchange string   `json:"exchange"`
 	NoWait   bool     `json:"nowait"`
-	Keys     []string `json:"keys"` // bind/routing keys
+	Keys     []string `json:"resourceID"` // bind/routing keys  // Keys     []string `json:"keys"`
 }
 
 // RabbitMQ Operate Wrapper
@@ -159,9 +160,11 @@ func (r *RabbitMQ) ConsumeQueue(queue string, message chan []byte) (err error) {
 	go func(deliveries <-chan amqp.Delivery, done chan error, message chan []byte) {
 		for d := range deliveries {
 			message <- d.Body
+			log.Printf("----------Sending Content in Queue Now-------");
 		}
 		done <- nil
 	}(deliveries, r.done, message)
+	log.Printf("----------Queue is Empty Now-------");
 	return nil
 }
 
@@ -211,18 +214,20 @@ func QueueHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if r.Method == "GET" {
 		r.ParseForm()
-
 		rabbit := new(RabbitMQ)
 		if err := rabbit.Connect(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer rabbit.Close()
+
+		log.Printf("----------Connecting to the Queue-------");
 
 		message := make(chan []byte)
 
 		for _, name := range r.Form["name"] {
+			fmt.Printf("Got {%v}", name)
 			if err := rabbit.ConsumeQueue(name, message); err != nil {
+				fmt.Printf("Connection Closed")
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -230,11 +235,25 @@ func QueueHandler(w http.ResponseWriter, r *http.Request) {
 
 		w.Write([]byte(""))
 		w.(http.Flusher).Flush()
+                name := r.Form["name"]
+
+		// Check the status of the Connection and Close the Queue Here //
+                notify := w.(http.CloseNotifier).CloseNotify()
+		go func() {
+                                <-notify
+                                log.Printf("=================HTTP connection just closed for {%v}=============", name)
+                                rabbit.Close()
+                                log.Printf("=================AMQP connection is now closed for {%v}=============", name)
+                                    }()
 
 		for {
 			fmt.Fprintf(w, "%s\n", <-message)
 			w.(http.Flusher).Flush()
+			log.Printf("----------Sending data to Client {%v}=============", name);
 		}
+
+		rabbit.Close()
+
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -262,17 +281,17 @@ func QueueBindHandler(w http.ResponseWriter, r *http.Request) {
 		defer rabbit.Close()
 
 		if r.Method == "POST" {
-			if err = rabbit.BindQueue(entity.Queue, entity.Exchange, entity.Keys, entity.NoWait); err != nil {
+			if err = rabbit.BindQueue(entity.Queue, "amq.topic", entity.Keys, entity.NoWait); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			w.Write([]byte("bind queue ok"))
+			w.Write([]byte("------- Subscribed -------\n"))
 		} else if r.Method == "DELETE" {
-			if err = rabbit.UnBindQueue(entity.Queue, entity.Exchange, entity.Keys); err != nil {
+			if err = rabbit.UnBindQueue(entity.Queue, "amq.topic", entity.Keys); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			w.Write([]byte("unbind queue ok"))
+			w.Write([]byte("------- UnSubscribed -------\n"))
 		}
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -300,11 +319,11 @@ func PublishHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		defer rabbit.Close()
 
-		if err = rabbit.Publish(entity.Exchange, entity.Key, entity.DeliveryMode, entity.Priority, entity.Body); err != nil {
+		if err = rabbit.Publish("amq.topic", entity.Key, entity.DeliveryMode, entity.Priority, entity.Body); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Write([]byte("publish message ok"))
+		w.Write([]byte("\"publish\"" + "Success" + "\n"))
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
