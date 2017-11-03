@@ -1,6 +1,7 @@
 Software License Agreement (BSD License)
 
 Copyright (C) 2013, by Chen "smallfish" Xiaoyu (陈小玉) <smallfish.xy@gmail.com>.
+Bug Fixing, Updated and Modified (C) 2017, Vasanth Rajaraman <swaminathanvasanth.r@gmail.com>
 
 All rights reserved.
 
